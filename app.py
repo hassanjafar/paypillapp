@@ -89,7 +89,7 @@ def getValue(query):
     result=pd.read_sql(query,mydb)
     mydb.close()
     return result
-
+# Single Bill Implementation
 @app.route("/api/values/queryBillInfo",methods=['POST'])
 def queryBillInfoApi():
     mydb=get_connection()
