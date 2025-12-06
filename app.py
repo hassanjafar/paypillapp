@@ -260,56 +260,76 @@ def queryBillInfoForMutliBill():
         }
 
         bills = []
+        mydb = None
+        cursor = None
+        
         try:
             jsonData = getDecodedData(request.json['payload']['requestBody'])
             student_id = jsonData['studentId']
+            
+            logging.info(f"Querying bills for student: {student_id}")
 
             mydb = get_connection()
             cursor = mydb.cursor(dictionary=True)
+            
+            # Call stored procedure
             cursor.callproc('QueryMultiBillInfo', [student_id])
 
             bill_total = None
             data = []
-
-            # Iterate through the result sets stored in the procedure
-            for result in cursor.stored_results():
-                # Get column names from the description
-                columns = [col[0] for col in result.description]
-
-                if bill_total is None:
-                    # --- FIX: Convert the first result (Total) from tuple to dict ---
-                    row = result.fetchone()
-                    if row:
-                        bill_total = dict(zip(columns, row))
-                else:
-                    # --- FIX: Convert the second result (Bills list) from tuples to dicts ---
-                    rows = result.fetchall()
-                    if rows:
-                        data = [dict(zip(columns, row)) for row in rows]
             
-            mydb.close() # Always close the connection!
+            # Convert generator to list to access results
+            results = list(cursor.stored_results())
+            logging.info(f"Number of result sets returned: {len(results)}")
+            
+            if len(results) >= 1:
+                # First result set - bill total
+                result_set_1 = results[0]
+                row = result_set_1.fetchone()  # Already a dict because cursor(dictionary=True)
+                if row:
+                    bill_total = row
+                    logging.info(f"Bill total retrieved: {bill_total}")
+            
+            if len(results) >= 2:
+                # Second result set - bills list
+                result_set_2 = results[1]
+                rows = result_set_2.fetchall()  # Already list of dicts
+                if rows:
+                    data = rows
+                    logging.info(f"Number of bills retrieved: {len(data)}")
 
             if bill_total:
                 response['responseHeader']['resultCode'] = "0"
                 response['responseHeader']['resultMessage'] = "SUCCESS"
-                
-                # Now this works because bill_total is a dictionary
-                response.update(bill_total) 
-                
-                bills = data
-                response['bills'] = bills
+                response.update(bill_total)
+                response['bills'] = data
                 return jsonify(response)
             else:
-                response['responseHeader']['resultMessage'] = "error occured"
-                response['responseHeader']['resultCode'] = "401"
-                return jsonify(response), 401
+                logging.warning(f"No bill data found for student: {student_id}")
+                response['responseHeader']['resultMessage'] = "No data found"
+                response['responseHeader']['resultCode'] = "404"
+                return jsonify(response), 404
 
+        except mysql.connector.Error as db_err:
+            logging.error(f"Database error in MultiBill Query: {db_err}")
+            logging.error(f"Error code: {db_err.errno}, SQL State: {db_err.sqlstate}")
+            response['responseHeader']['resultMessage'] = "Database Error"
+            response['responseHeader']['resultCode'] = "500"
+            return jsonify(response), 500
+            
         except Exception as e:
-            logging.error("Error in MultiBill Query: %s", e)
+            logging.error(f"Error in MultiBill Query: {e}", exc_info=True)
             response['responseHeader']['resultMessage'] = "Internal Server Error"
             response['responseHeader']['resultCode'] = "500"
             return jsonify(response), 500
             
+        finally:
+            # Always close cursor and connection
+            if cursor:
+                cursor.close()
+            if mydb:
+                mydb.close()
+
     else:
         logging.warning("Unauthorized access to MultiBill Query.")
         response = {
@@ -322,6 +342,7 @@ def queryBillInfoForMutliBill():
             }
         }
         return jsonify(response), 401
+        
 @app.route("/api/values/pay",methods=['POST'])
 def queryInfoForMultiBillPayment():
     logging.info("MultiBill Payment request received: %s", request.json)
